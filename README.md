@@ -2,14 +2,14 @@
 
 This tool finds the **cheapest chef-crafted food per extract type** (Fine, Masterwork, Rare, Exotic) to compost in the **Portable Composter**, by querying the [Guild Wars 2 API](https://wiki.guildwars2.com/wiki/API:2).
 
-Composting food in the Portable Composter yields extracts by recipe rating; these are combined into **Exquisite Extract of Nourishment** (5 Fine + 5 Masterwork + 5 Rare + 10 Exotic), used to craft **Pile of Enriched Compost** and varietal seed pouches (e.g. Varietal Cilantro Seed Pouch). The app lists tradeable consumable food by extract tier and Trading Post price so you can choose the most cost-effective option for each tier.
+Composting food in the Portable Composter yields extracts by recipe rating; these are combined into **Exquisite Extract of Nourishment** (5 Fine + 5 Masterwork + 5 Rare + 10 Exotic), used to craft **Pile of Enriched Compost** and varietal seed pouches (e.g. Varietal Cilantro Seed Pouch). **Feasts** give **10 extracts per compost** (regular food gives 1), so they can be more cost-effective per extract—the app compares by price per extract and shows a Type column (Feast/Food). The food list can include both single-serving food and feasts (from the Wiki Food page and Category:Feasts).
 
 ## Features
 
 - **Cross-platform GUI** (Windows, macOS, Linux) using Python and tkinter
 - **Configurable API base URL**
 - **Extract tiers**: Fine, Masterwork, Rare, Exotic (ascended excluded); sorted by instant buy (sell listing) price
-- **Food list filter**: optional `food.json` list of item names; use **Populate food list from Wiki** to fetch and save names so the tool only considers those items
+- **Food list filter**: optional `food.json` list of item names (and optional `feast_names`); use **Populate food list from Wiki** to fetch food and feast names so the tool considers both (feasts yield 10 extracts each)
 - **State persistence**: settings and window geometry saved in `state.json` in the app directory
 - **API cache**: responses cached under `.cache/gw2/` with optional purge from the UI
 
@@ -66,7 +66,7 @@ python main.py
 1. **Settings**
    - **API base URL**: Leave as `https://api.guildwars2.com` unless you use a different endpoint.
 
-2. (Optional) Click **Populate food list from Wiki** to fetch food item names and save them to `food.json`; **Fetch cheapest food** will then only consider those items. If `food.json` is empty or missing, all tradeable compostable food from recipes is considered.
+2. (Optional) Click **Populate food list from Wiki** to fetch food and feast names (from the Wiki Food page and Category:Feasts) and save them to `food.json`; **Fetch cheapest food** will then only consider those items. Feasts give 10 extracts per compost and can be more cost-effective. If `food.json` is empty or missing, all tradeable compostable food from recipes is considered.
 
 3. Click **Fetch cheapest food** to load food per extract tier (Fine, Masterwork, Rare, Exotic) and their Trading Post prices from the API. The first run may take 1–2 minutes while recipe and item data is fetched. Results are sorted by instant buy price (cheapest first).
 
@@ -75,7 +75,7 @@ python main.py
 ## State and data files
 
 - **`state.json`** (project root): API base URL, window geometry. The app overwrites it when you change settings or close the window. To reset, delete it and restart.
-- **`food.json`** (project root): Optional list of food item names (`item_names`). If present and non-empty, only these items are considered when fetching cheapest food. Populate via **Populate food list from Wiki** or edit by hand.
+- **`food.json`** (project root): Optional list of food item names (`item_names`) and optionally feast names (`feast_names`). If present and non-empty, only these items are considered. Feasts yield 10 extracts per compost. Populate via **Populate food list from Wiki** (includes Category:Feasts) or edit by hand.
 - **`.cache/gw2/`**: Cached API responses; use **Purge cache** in the app to clear.
 
 ## Project layout

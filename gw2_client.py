@@ -131,7 +131,8 @@ def load_food_list() -> list[str]:
     """
     Load the list of food item names from food.json.
     When the list is non-empty, run_analysis only considers items in this list.
-    Returns empty list if file is missing or item_names is empty.
+    Includes both item_names (single-serving food) and feast_names (feasts; 10 extracts each).
+    Returns empty list if file is missing or both item_names and feast_names are empty.
     """
     path = food_list_path()
     if not path.exists():
@@ -140,22 +141,51 @@ def load_food_list() -> list[str]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         names = data.get("item_names")
-        if isinstance(names, list):
-            return [str(n).strip() for n in names if str(n).strip()]
-        return []
+        if not isinstance(names, list):
+            names = []
+        feast_names = data.get("feast_names")
+        if not isinstance(feast_names, list):
+            feast_names = []
+        combined = [str(n).strip() for n in names + feast_names if str(n).strip()]
+        return list(dict.fromkeys(combined))  # preserve order, dedupe
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Could not load food list from %s: %s", path, e)
         return []
 
 
-def save_food_list(item_names: list[str]) -> None:
-    """Save the list of food item names to food.json."""
+def load_food_list_feast_names() -> list[str]:
+    """
+    Load only feast names from food.json (for UI/documentation).
+    Feasts yield 10 extracts per compost and can be more cost-effective than single-extract food.
+    """
+    path = food_list_path()
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        feast_names = data.get("feast_names")
+        if isinstance(feast_names, list):
+            return [str(n).strip() for n in feast_names if str(n).strip()]
+    except (OSError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def save_food_list(
+    item_names: list[str],
+    feast_names: Optional[list[str]] = None,
+) -> None:
+    """Save food and optional feast names to food.json. Feasts give 10 extracts per compost."""
     path = food_list_path()
     data = {
         "item_names": list(item_names),
         "source": "https://wiki.guildwars2.com/wiki/Food",
         "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if feast_names is not None:
+        data["feast_names"] = list(feast_names)
+        data["feast_source"] = "https://wiki.guildwars2.com/wiki/Category:Feasts"
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -201,6 +231,67 @@ def fetch_food_names_from_wiki() -> tuple[list[str], Optional[str]]:
             seen.add(name)
             names.append(name)
     return names, None
+
+
+# Meta pages in Category:Feasts to exclude from the feast item list
+_WIKI_FEAST_EXCLUDE = frozenset({"feast (food)", "ascended feast"})
+
+
+def fetch_feast_names_from_wiki() -> tuple[list[str], Optional[str]]:
+    """
+    Fetch feast item names from the GW2 Wiki Category:Feasts.
+    Feasts give 10 extracts per compost (vs 1 for regular food) and can be more cost-effective.
+    Returns (list of feast names, None) on success, or ([], error_message) on failure.
+    """
+    api_url = "https://wiki.guildwars2.com/api.php"
+    all_names: list[str] = []
+    cmcontinue: Optional[str] = None
+    while True:
+        params = {
+            "action": "query",
+            "list": "categorymembers",
+            "cmtitle": "Category:Feasts",
+            "cmlimit": 500,
+            "format": "json",
+        }
+        if cmcontinue:
+            params["cmcontinue"] = cmcontinue
+        try:
+            r = requests.get(api_url, params=params, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+        except requests.RequestException as e:
+            return [], str(e)
+        except ValueError as e:
+            return [], f"Invalid JSON: {e}"
+        query = data.get("query") or {}
+        members = query.get("categorymembers") or []
+        for m in members:
+            title = (m.get("title") or "").strip()
+            if not title:
+                continue
+            key = title.lower()
+            if key in _WIKI_FEAST_EXCLUDE:
+                continue
+            all_names.append(title)
+        cmcontinue = (data.get("continue") or {}).get("cmcontinue")
+        if not cmcontinue:
+            break
+    return all_names, None
+
+
+def fetch_food_and_feast_names_from_wiki() -> tuple[list[str], list[str], Optional[str]]:
+    """
+    Fetch both food and feast names from the Wiki.
+    Returns (item_names, feast_names, None) on success, or ([], [], error_message) on failure.
+    """
+    names, err = fetch_food_names_from_wiki()
+    if err:
+        return [], [], err
+    feast_names, feast_err = fetch_feast_names_from_wiki()
+    if feast_err:
+        return names, [], None  # still return food names if feast fetch fails
+    return names, feast_names, None
 
 
 def load_state() -> dict[str, Any]:

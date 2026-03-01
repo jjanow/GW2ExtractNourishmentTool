@@ -24,7 +24,7 @@ from gw2_client import (
     run_analysis,
     load_food_list,
     save_food_list,
-    fetch_food_names_from_wiki,
+    fetch_food_and_feast_names_from_wiki,
     GW2APIError,
 )
 
@@ -234,7 +234,7 @@ class Application:
         tree_frame.pack(fill=tk.BOTH, expand=True)
         self.tree = ttk.Treeview(
             tree_frame,
-            columns=("extract_type", "name", "extracts", "instant_buy", "per_ext_sell", "buy_order", "per_ext_buy", "rarity"),
+            columns=("extract_type", "name", "type", "extracts", "instant_buy", "per_ext_sell", "buy_order", "per_ext_buy", "rarity"),
             show="headings",
             height=12,
             selectmode="browse",
@@ -247,6 +247,7 @@ class Application:
         _columns = (
             ("extract_type", "Extract type"),
             ("name", "Item name"),
+            ("type", "Type"),
             ("extracts", "Extracts"),
             ("instant_buy", "Instant buy"),
             ("per_ext_sell", "Per ext. (sell)"),
@@ -262,6 +263,7 @@ class Application:
             )
         self.tree.column("extract_type", width=90, minwidth=70)
         self.tree.column("name", width=260, minwidth=120)
+        self.tree.column("type", width=52, minwidth=48)
         self.tree.column("extracts", width=56, minwidth=50)
         self.tree.column("instant_buy", width=82, minwidth=70)
         self.tree.column("per_ext_sell", width=82, minwidth=70)
@@ -310,9 +312,12 @@ class Application:
             for idx, r in enumerate(self._current_results):
                 iid = f"row_{idx}"
                 row_tag = "even" if idx % 2 == 0 else "odd"
+                ext_per = r.get("extracts_per_compost", 1)
+                row_type = "Feast" if (isinstance(ext_per, int) and ext_per >= 10) else "Food"
                 self.tree.insert("", tk.END, iid=iid, values=(
                     r.get("extract_type", "—"),
                     r.get("name", ""),
+                    row_type,
                     r.get("extracts_per_compost", "—"),
                     r.get("price_display", ""),
                     r.get("price_per_extract_display", ""),
@@ -348,12 +353,16 @@ class Application:
 
     _RECIPE_HELP_TEXT = (
         "Recipe: 5 Fine + 5 Masterwork + 5 Rare + 10 Exotic → 1 Exquisite Extract. "
-        "Salvage the listed foods with the Portable Composter. Feasts give 10 extracts per item.\n\n"
+        "Salvage the listed foods with the Portable Composter.\n\n"
+        "Feasts give 10 extracts per compost (regular food gives 1), so a feast can be more "
+        "cost-effective per extract even if its total price is higher. The table shows \"Type\" "
+        "(Feast/Food) and \"Per ext.\" (price per single extract) so you can compare fairly.\n\n"
         "\"Extract type\" = type of extract you get when composting; \"Item rarity\" = the item's in-game rarity "
         "(they can differ: e.g. a Masterwork item can yield Rare or Exotic extract).\n\n"
         "Recipe rating ranges (Chef min_rating, 100% chance per wiki):\n"
         "  Fine: 0–50  |  Masterwork: 150–225  |  Rare: 300–375  |  Exotic: 400–450. "
         "Ascended (500) not used.\n\n"
+        "Use \"Populate food list from Wiki\" to include feasts (Category:Feasts) in the food list. "
         "If \"No tradeable option\", see wiki (Portable Composter/Guide)."
     )
 
@@ -391,6 +400,7 @@ class Application:
     _SORT_KEYS = {
         "extract_type": ("extract_type", False),  # string, special-cased by order
         "name": ("name", False),
+        "type": ("extracts_per_compost", True),  # Feast (10) vs Food (1)
         "extracts": ("extracts_per_compost", True),
         "instant_buy": ("sell_price", True),
         "per_ext_sell": ("sell_price_per_extract", True),
@@ -432,9 +442,12 @@ class Application:
         for idx, r in enumerate(sorted_rows):
             iid = f"row_{idx}"
             row_tag = "even" if idx % 2 == 0 else "odd"
+            ext_per = r.get("extracts_per_compost", 1)
+            row_type = "Feast" if (isinstance(ext_per, int) and ext_per >= 10) else "Food"
             self.tree.insert("", tk.END, iid=iid, values=(
                 r.get("extract_type", "—"),
                 r.get("name", ""),
+                row_type,
                 r.get("extracts_per_compost", "—"),
                 r.get("price_display", ""),
                 r.get("price_per_extract_display", ""),
@@ -479,33 +492,39 @@ class Application:
             messagebox.showerror("Purge cache", "Could not purge the cache. Check logs.")
 
     def _on_populate_food_list(self) -> None:
-        """Fetch food names from the GW2 Wiki and save to food.json (runs in background)."""
-        self.status_var.set("Fetching food list from Wiki…")
+        """Fetch food and feast names from the GW2 Wiki and save to food.json (runs in background)."""
+        self.status_var.set("Fetching food list from Wiki (food + feasts)…")
         self.root.update_idletasks()
 
-        result_holder: list = []
+        result_holder: list = []  # [item_names, feast_names]
         error_holder: list = []
 
         def work() -> None:
-            names, err = fetch_food_names_from_wiki()
+            item_names, feast_names, err = fetch_food_and_feast_names_from_wiki()
             if err:
                 error_holder.append(err)
             else:
-                result_holder.extend(names)
+                result_holder.append(item_names)
+                result_holder.append(feast_names)
 
         def on_done() -> None:
             if error_holder:
                 self.status_var.set("Wiki fetch failed.")
                 messagebox.showerror("Populate food list", error_holder[0])
                 return
-            names = result_holder
-            save_food_list(names)
-            self.status_var.set(f"Food list updated ({len(names)} items).")
-            messagebox.showinfo(
-                "Populate food list",
-                f"Saved {len(names)} food names from the Wiki to food.json.\n"
-                "Fetch cheapest food will now only consider these items.",
+            if len(result_holder) != 2:
+                self.status_var.set("Wiki fetch failed.")
+                return
+            item_names, feast_names = result_holder[0], result_holder[1]
+            save_food_list(item_names, feast_names)
+            total = len(item_names) + len(feast_names)
+            self.status_var.set(f"Food list updated ({total} items, {len(feast_names)} feasts).")
+            msg = (
+                f"Saved {len(item_names)} food and {len(feast_names)} feast names to food.json.\n"
+                "Feasts give 10 extracts per compost and can be more cost-effective.\n"
+                "Fetch cheapest food will consider both."
             )
+            messagebox.showinfo("Populate food list", msg)
 
         def run_then_schedule() -> None:
             work()
@@ -563,9 +582,12 @@ class Application:
                 for idx, it in enumerate(items):
                     iid = f"row_{idx}"
                     row_tag = "even" if idx % 2 == 0 else "odd"
+                    ext_per = it.get("extracts_per_compost", 1)
+                    row_type = "Feast" if (isinstance(ext_per, int) and ext_per >= 10) else "Food"
                     self.tree.insert("", tk.END, iid=iid, values=(
                         it.get("extract_type", "—"),
                         it.get("name", ""),
+                        row_type,
                         it.get("extracts_per_compost", "—"),
                         it.get("price_display", "…"),
                         it.get("price_per_extract_display", "…"),
@@ -635,9 +657,12 @@ class Application:
             for idx, r in enumerate(results):
                 iid = f"row_{idx}"
                 row_tag = "even" if idx % 2 == 0 else "odd"
+                ext_per = r.get("extracts_per_compost", 1)
+                row_type = "Feast" if (isinstance(ext_per, int) and ext_per >= 10) else "Food"
                 self.tree.insert("", tk.END, iid=iid, values=(
                     r.get("extract_type", "—"),
                     r.get("name", ""),
+                    row_type,
                     r.get("extracts_per_compost", "—"),
                     r.get("price_display", ""),
                     r.get("price_per_extract_display", ""),
